@@ -154,7 +154,6 @@
 Файлы: `frontend/src/api/api.js`, `frontend/src/App.jsx`  
 Токены хранятся на клиенте, запросы к API автоматизированы через interceptors.
 
-- Реализованы страницы регистрации и входа на React.
 - Токены сохраняются в `localStorage`.
 - Настроены Axios interceptors для:
   - автоматической подстановки `accessToken` в запросы;
