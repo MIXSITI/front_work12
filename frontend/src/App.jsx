@@ -37,7 +37,7 @@ function App() {
 
   const canViewProducts = Boolean(user);
   const canManageProducts = user?.role === 'seller' || user?.role === 'admin';
-  const canDeleteProducts = user?.role !== 'user';
+  const canDeleteProducts = user?.role === 'admin';
   const canManageUsers = user?.role === 'admin';
   const canLookupProductById = user?.role !== 'user';
   const canAddToCart = user?.role === 'user';
