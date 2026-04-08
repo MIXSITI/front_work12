@@ -90,22 +90,21 @@
   - тело запроса
   - возможные коды ответов
 - Интерактивная документация доступна по адресу:
-  - **http://localhost:3001/api-docs**
-
+ 
 ### Занятие 7 — Базовые методы аутентификации
-Файлы: `backend/app.js`, `frontend/src/components/AuthForm.jsx`, `frontend/src/App.jsx`  
+Файлы: `backend/app.js`, `backend/security/hash/hashPassword.js`, `backend/security/verify/verifyPassword.js`, `backend/security/hash/store/hashStore.js`, `backend/security/verify/store/credentialStore.js`, `frontend/src/components/AuthForm.jsx`, `frontend/src/App.jsx`  
 Реализованы регистрация и вход пользователей, пароли хешируются на сервере.
 
 - **Для чего реализовано**: чтобы обеспечить безопасную регистрацию и вход пользователя, а также хранить пароли только в хешированном виде.
 
 - Добавлены маршруты регистрации и входа.
 - Реализовано хеширование паролей через `bcrypt`.
-- Пароль сохраняется только как `passwordHash`.
-
+- Хеши паролей сохраняются в `hashStore`.
+- Данные для проверки входа хранятся в `credentialStore`.
 - **Хеширование паролей**:
   - `bcrypt`, соль учитывается внутри хеша
 - **Поля пользователя**:
-  - `id`, `email`, `first_name`, `last_name`, `password` (в виде хеша)
+  - `id`, `email`, `first_name`, `last_name` (хеш хранится отдельно в `hashStore`)
 - **Маршруты аутентификации**:
   - `POST /api/auth/register`
   - `POST /api/auth/login`
@@ -117,7 +116,7 @@
   - `DELETE /api/products/:id`
 
 ### Занятие 8 — JWT-токены и защищённые маршруты
-Файлы: `backend/app.js`, `frontend/src/api/api.js`  
+Файлы: `backend/app.js`, `backend/security/tokens/jwtService.js`, `frontend/src/api/api.js`  
 
 - При входе выдается `accessToken`.
 - Добавлен защищенный маршрут `GET /api/auth/me`.
@@ -134,7 +133,7 @@
   - `DELETE /api/products/:id`
 
 ### Занятие 9 — Refresh-токены
-Файлы: `backend/app.js`, `frontend/src/api/api.js`  
+Файлы: `backend/app.js`, `backend/security/tokens/store/refreshTokenStore.js`, `backend/security/tokens/jwtService.js`, `frontend/src/api/api.js`  
 Реализована пара access/refresh и обновление токенов без повторного ввода пароля.
 
 - Добавлен `refreshToken`.
@@ -149,12 +148,13 @@
   - refresh-токен передаётся в заголовке `Authorization: Bearer <refreshToken>`
 - **Ответ**:
   - JSON с полями `accessToken` и `refreshToken`
+- **Хранилище refresh-токенов**:
+  - `refreshTokenStore` (отдельный файл/модуль)
 
 ### Занятие 10 — Хранение токенов на фронтенде
 Файлы: `frontend/src/api/api.js`, `frontend/src/App.jsx`  
 Токены хранятся на клиенте, запросы к API автоматизированы через interceptors.
 
-- Реализованы страницы регистрации и входа на React.
 - Токены сохраняются в `localStorage`.
 - Настроены Axios interceptors для:
   - автоматической подстановки `accessToken` в запросы;
@@ -171,7 +171,7 @@
   - страницы входа и регистрации
   - работа с товарами через API после авторизации
 
-### Занятие 11 — Управление доступом на основе ролей (RBAC)
+### Занятие 11 — Управление доступом на основе ролей
 Файлы: `backend/app.js`, `frontend/src/App.jsx`, `frontend/src/components/UserManagement.jsx`  
 Реализованы роли пользователя, продавца и администратора и проверка прав на сервере.
 
@@ -225,6 +225,19 @@ work 12/
 │   │   ├── images/                   # Стандартные изображения товаров
 │   │   └── uploads/                  # Загруженные изображения
 │   ├── app.js                        # Express API + JWT + роли + Swagger
+│   ├── security/
+│   │   ├── hash/
+│   │   │   ├── hashPassword.js       # Хеширование пароля
+│   │   │   └── store/
+│   │   │       └── hashStore.js      # Хранилище хешей (userId -> hash)
+│   │   ├── verify/
+│   │   │   ├── verifyPassword.js     # Проверка пароля по хешу
+│   │   │   └── store/
+│   │   │       └── credentialStore.js # Хранилище login-данных (email -> userId)
+│   │   └── tokens/
+│   │       ├── jwtService.js         # Генерация/проверка JWT
+│   │       └── store/
+│   │           └── refreshTokenStore.js # Хранилище refresh-токенов
 │   ├── requests.http                 # Примеры HTTP-запросов
 │   ├── package.json
 │   └── package-lock.json

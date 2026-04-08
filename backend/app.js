@@ -4,18 +4,41 @@ const swaggerJsdoc = require('swagger-jsdoc');
 const swaggerUi = require('swagger-ui-express');
 const cors = require('cors');
 const multer = require('multer');
-const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
 const path = require('path');
 const fs = require('fs');
+const hashPassword = require('./security/hash/hashPassword');
+const verifyPassword = require('./security/verify/verifyPassword');
+const {
+  setPasswordHash,
+  getPasswordHash,
+  clearPasswordHashes
+} = require('./security/hash/store/hashStore');
+const {
+  setCredential,
+  getUserIdByEmail,
+  updateCredential,
+  clearCredentials
+} = require('./security/verify/store/credentialStore');
+const {
+  addRefreshToken,
+  hasRefreshToken,
+  removeRefreshToken,
+  clearRefreshTokens
+} = require('./security/tokens/store/refreshTokenStore');
+const createJwtService = require('./security/tokens/jwtService');
 
 const app = express();
 const port = Number(process.env.PORT) || 3001;
-const SALT_ROUNDS = 10;
 const JWT_SECRET = 'access_secret';
 const REFRESH_SECRET = 'refresh_secret';
 const ACCESS_EXPIRES_IN = '15m';
 const REFRESH_EXPIRES_IN = '7d';
+const jwtService = createJwtService({
+  accessSecret: JWT_SECRET,
+  refreshSecret: REFRESH_SECRET,
+  accessExpiresIn: ACCESS_EXPIRES_IN,
+  refreshExpiresIn: REFRESH_EXPIRES_IN
+});
 
 const uploadDir = path.join(__dirname, 'public/uploads');
 if (!fs.existsSync(uploadDir)) {
@@ -59,7 +82,6 @@ app.use((req, res, next) => {
 });
 
 let users = [];
-const refreshTokens = new Set();
 let products = [
   {
     id: nanoid(6),
@@ -154,16 +176,13 @@ function sanitizeUser(user) {
   };
 }
 
-async function hashPassword(password) {
-  return bcrypt.hash(password, SALT_ROUNDS);
-}
-
-async function verifyPassword(password, passwordHash) {
-  return bcrypt.compare(password, passwordHash);
-}
-
 function findUserByEmail(email) {
-  return users.find((user) => user.email === email);
+  const userId = getUserIdByEmail(email);
+  if (!userId) {
+    return null;
+  }
+
+  return findUserById(userId);
 }
 
 function findUserById(id) {
@@ -174,60 +193,24 @@ function findProductById(id) {
   return products.find((product) => product.id === id);
 }
 
-function generateAccessToken(user) {
-  return jwt.sign(
-    {
-      sub: user.id,
-      email: user.email,
-      first_name: user.first_name,
-      last_name: user.last_name,
-      role: user.role
-    },
-    JWT_SECRET,
-    { expiresIn: ACCESS_EXPIRES_IN }
-  );
-}
-
-function generateRefreshToken(user) {
-  return jwt.sign(
-    {
-      sub: user.id,
-      email: user.email,
-      first_name: user.first_name,
-      last_name: user.last_name,
-      role: user.role
-    },
-    REFRESH_SECRET,
-    {
-      expiresIn: REFRESH_EXPIRES_IN,
-      jwtid: nanoid(12)
-    }
-  );
-}
-
 function issueTokenPair(user) {
-  const accessToken = generateAccessToken(user);
-  const refreshToken = generateRefreshToken(user);
+  const accessToken = jwtService.generateAccessToken(user);
+  const refreshToken = jwtService.generateRefreshToken(user);
 
-  refreshTokens.add(refreshToken);
+  addRefreshToken(refreshToken);
 
   return { accessToken, refreshToken };
 }
 
-function extractBearerToken(headerValue = '') {
-  const [scheme, token] = headerValue.split(' ');
-  return scheme === 'Bearer' && token ? token : null;
-}
-
 function authMiddleware(req, res, next) {
-  const token = extractBearerToken(req.headers.authorization);
+  const token = jwtService.extractBearerToken(req.headers.authorization);
 
   if (!token) {
     return res.status(401).json({ error: 'Missing or invalid Authorization header' });
   }
 
   try {
-    const payload = jwt.verify(token, JWT_SECRET);
+    const payload = jwtService.verifyAccessToken(token);
     const currentUser = findUserById(payload.sub);
 
     if (!currentUser) {
@@ -331,16 +314,27 @@ async function createSeedUsers() {
     }
   ];
 
+  clearCredentials();
+  clearPasswordHashes();
+  clearRefreshTokens();
+
   users = await Promise.all(
-    seedUsers.map(async (user) => ({
-      id: nanoid(8),
-      email: user.email,
-      first_name: user.first_name,
-      last_name: user.last_name,
-      password: await hashPassword(user.password),
-      role: user.role,
-      isBlocked: false
-    }))
+    seedUsers.map(async (user) => {
+      const id = nanoid(8);
+      const passwordHash = await hashPassword(user.password);
+
+      setCredential(user.email, id);
+      setPasswordHash(id, passwordHash);
+
+      return {
+        id,
+        email: user.email,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        role: user.role,
+        isBlocked: false
+      };
+    })
   );
 }
 
@@ -516,10 +510,13 @@ app.post('/api/auth/register', async (req, res, next) => {
       email,
       first_name: firstName,
       last_name: lastName,
-      password: await hashPassword(password),
       role,
       isBlocked: false
     };
+
+    const passwordHash = await hashPassword(password);
+    setCredential(email, newUser.id);
+    setPasswordHash(newUser.id, passwordHash);
 
     users.push(newUser);
     res.status(201).json(sanitizeUser(newUser));
@@ -573,7 +570,12 @@ app.post('/api/auth/login', async (req, res, next) => {
       return res.status(403).json({ error: 'Вы заблокированы' });
     }
 
-    const isAuthenticated = await verifyPassword(password, user.password);
+    const passwordHash = getPasswordHash(user.id);
+    if (!passwordHash) {
+      return res.status(401).json({ error: 'invalid credentials' });
+    }
+
+    const isAuthenticated = await verifyPassword(password, passwordHash);
     if (!isAuthenticated) {
       return res.status(401).json({ error: 'invalid credentials' });
     }
@@ -614,31 +616,31 @@ app.post('/api/auth/login', async (req, res, next) => {
  *         description: Пользователь не найден
  */
 app.post('/api/auth/refresh', (req, res) => {
-  const refreshToken = extractBearerToken(req.headers.authorization);
+  const refreshToken = jwtService.extractBearerToken(req.headers.authorization);
 
   if (!refreshToken) {
     return res.status(400).json({ error: 'Missing or invalid Authorization header' });
   }
 
-  if (!refreshTokens.has(refreshToken)) {
+  if (!hasRefreshToken(refreshToken)) {
     return res.status(401).json({ error: 'invalid refresh token' });
   }
 
   try {
-    const payload = jwt.verify(refreshToken, REFRESH_SECRET);
+    const payload = jwtService.verifyRefreshToken(refreshToken);
     const user = users.find((item) => item.id === payload.sub);
 
     if (!user) {
-      refreshTokens.delete(refreshToken);
+      removeRefreshToken(refreshToken);
       return res.status(404).json({ error: 'user not found' });
     }
 
-    refreshTokens.delete(refreshToken);
+    removeRefreshToken(refreshToken);
     const nextTokens = issueTokenPair(user);
 
     res.json(nextTokens);
   } catch (error) {
-    refreshTokens.delete(refreshToken);
+    removeRefreshToken(refreshToken);
     return res.status(401).json({ error: 'invalid or expired refresh token' });
   }
 });
@@ -797,6 +799,7 @@ app.put('/api/users/:id', authMiddleware, roleMiddleware([ROLES.ADMIN]), (req, r
     return res.status(409).json({ error: 'user already exists' });
   }
 
+  updateCredential(user.email, email, user.id);
   user.email = email;
   user.first_name = firstName;
   user.last_name = lastName;
